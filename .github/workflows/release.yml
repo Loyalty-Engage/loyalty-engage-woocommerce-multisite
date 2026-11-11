@@ -1,6 +1,12 @@
 name: Release WordPress multisite plugin
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -11,9 +17,13 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Validate multisite version and identity
         shell: bash
@@ -22,7 +32,7 @@ jobs:
           file=loyalty-engage-woocommerce-multisite.php
           version="$(sed -n "s/define('LEWM_PLUGIN_VERSION', '\([^']*\)').*/\1/p" "$file")"
           test -n "$version"
-          test "$version" = "${GITHUB_REF_NAME#v}"
+          test "$version" = "${RELEASE_TAG#v}"
           test "$(sed -n 's/^ \* Version: //p' "$file")" = "$version"
           grep -q '^ \* Network: true' "$file"
           test ! -f loyalty-engage-woocommerce.php
@@ -55,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           flags=()
-          if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then flags+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" loyalty-engage-woocommerce-multisite.zip \
-            --verify-tag --title "Loyalty Engage WooCommerce Multisite ${GITHUB_REF_NAME#v}" \
+          if [[ "${RELEASE_TAG#v}" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" loyalty-engage-woocommerce-multisite.zip \
+            --verify-tag --title "Loyalty Engage WooCommerce Multisite ${RELEASE_TAG#v}" \
             --generate-notes "${flags[@]}"
