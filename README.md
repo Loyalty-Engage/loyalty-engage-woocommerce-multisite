@@ -1,0 +1,243 @@
+# Loyalty Engage for WooCommerce Multisite (Development)
+
+This is a separate development project, version 0.4.0-alpha.1. It is not a
+production-ready multisite release. See [MULTISITE-DEVELOPMENT.md](MULTISITE-DEVELOPMENT.md)
+for the separation and remaining requirements. The documentation below describes
+the inherited single-site features, not completed multisite support.
+
+## Network setup (alpha)
+
+1. Network-activate this edition only; deactivate the single-site edition first. No existing single-site settings or balances are migrated automatically.
+2. In **Network Admin > Loyalty Engage**, save the central API URL, Client ID, Client Secret and Webhook Secret. Blank secret fields retain the current secret. Shop administrators cannot override these credentials through shop settings.
+3. Configure the displayed main-site customer-update callback in Loyalty Engage, with the shared secret. The callback works even when the main site has no WooCommerce shop.
+4. All plugin settings are central: **Algemeen**, **Orders en synchronisatie**, **Rewards en winkelwagen**, **Levels**, **Teksten en weergave**, and **Vormgeving**. Each section saves independently without resetting the others. Existing per-shop plugin options are ignored, not deleted. WooCommerce products, stock, currency, orders and coupons remain store-owned data, not plugin settings.
+5. Under **Network Admin > Loyalty Engage > Personalisaties**, set the shared tenant loader and personalization rules. Select shops per rule or enable all current/future shops. Selected pages are stored as site/page pairs, never shared numeric IDs. Shop administrators cannot edit these network rules.
+
+The local WordPress/WooCommerce sandbox and its disposable credentials are kept outside version control and release packages. Local integration tests exercise two real shops with an API double; real Loyalty Engage contract and concurrency testing remain release requirements. The inherited per-shop personalization administration described later in this README is replaced by central network administration in this edition.
+
+Customer identity uses the same WordPress network user and e-mail address. Loyalty data is stored in network-scoped user meta, not copied into each shop. Authenticated callbacks update this shared record. Logged-in page requests refresh from Loyalty Engage at most once per 30 seconds per user across shops; successful claims force a refresh. A failed API refresh retains the last known balance. Coins are never deducted locally: Loyalty Engage must validate and atomically execute purchases.
+
+Outbox tables and scheduled events are isolated from single-site. Network activation initializes existing sites, and newly initialized sites receive their own tables and schedules. Pending coupons are shop-scoped. Purchase and physical-purchase order references include network and site IDs; review references are also shop-qualified. Refund exports retain the inherited Return payload and still need API-contract verification before production.
+
+Run `for test in tests/*.php; do php "$test" || exit; done` and `node --test tests/*.test.cjs` for local checks. These tests use WordPress/API doubles, not a live multisite database or Loyalty Engage tenant. Test real network activation, callbacks, checkout, refunds, concurrent claims and multiple currencies on staging before release.
+
+WooCommerce plugin project that mirrors the main Loyalty Engage Shopify app capabilities with a WooCommerce-native architecture.
+
+## Included functionality
+
+- order export to Loyalty Engage via outbox
+- return export to Loyalty Engage via outbox
+- customer registration sync
+- loyalty rewards lookup from Loyalty Engage
+- physical reward reservation and cart insertion
+- WooCommerce coupon creation for claimed loyalty discount codes
+- coin-priced gift cards and physical rewards; level points are never spent
+- loyalty tier based free shipping
+- review export to Loyalty Engage via outbox
+- customer loyalty metadata sync into WordPress user meta
+- configurable loyalty overview block on the loyalty page
+- loyalty shop personalization by purchased product tags
+- configurable Loyalty Engage frontend personalizations with shortcodes and automatic page placement
+- retryable background processing with WooCommerce logging
+
+## Project structure
+
+```text
+woocommerce-loyalty-engage/
+├── loyalty-engage-woocommerce.php
+├── includes/
+│   ├── class-lew-activator.php
+│   ├── class-lew-plugin.php
+│   ├── class-lew-settings.php
+│   ├── class-lew-loyalty-engage-client.php
+│   ├── class-lew-logger.php
+│   ├── class-lew-outbox.php
+│   ├── class-lew-shipping.php
+│   ├── class-lew-webhooks.php
+│   ├── class-lew-rest-api.php
+│   └── class-lew-storefront.php
+└── assets/
+    ├── css/loyalty-page.css
+    └── js/loyalty-page.js
+```
+
+## How it works
+
+### Orders and refunds
+
+- WooCommerce order status `processing` and `completed` trigger purchase export
+- WooCommerce refunds trigger return export
+- approved WooCommerce product reviews trigger review export
+- payloads are queued in custom outbox tables
+- cron workers retry failed exports with exponential backoff
+
+### Storefront rewards
+
+- Under **Loyalty Engage > Teksten loyaltypagina**, configure the level and reward titles and subtitles. Use `{{coins}}` in the reward subtitle for the redeemable balance. Empty text hides that heading or subtitle.
+- **Eigen CSS loyaltypagina** accepts CSS without style tags. Prefix selectors with `#lew-loyalty-page` to avoid affecting the surrounding theme. These settings apply to `[loyalty_engage_page]`, not external personalization templates.
+- frontend page uses shortcode `[loyalty_engage_page]`
+- rewards are fetched from Loyalty Engage
+- rewards are matched against WooCommerce products by SKU, variation id, barcode fallback and title fallback
+- gift cards and physical gifts are presented together in one rewards overview with clear type labels
+- rewards remain visible when the customer still needs more coins or a higher loyalty level
+- the overview shows the synced coin balance (`lew_availableCoins`); `lew_points` is used only for levels
+- physical rewards without a WooCommerce product match remain visible as upcoming rewards but cannot be claimed yet
+- current, achieved and upcoming loyalty levels are shown as level badges; configure the complete ordered level list in **Loyalty Engage > Loyalty levels** (`Name|points` per line) so levels without a reward are also visible
+- the overview requests the unfiltered catalog and renders every returned reward, including unknown reward types as non-claimable cards; Loyalty Engage must include future rewards in its catalog response for them to appear
+- physical rewards are reserved in Loyalty Engage and then added to the WooCommerce cart
+- product pages can show estimated earning points based on the displayed WooCommerce price and a configurable base earning rate
+
+### Personalization engine storefront
+
+- the plugin exposes `window.lewWooCommerce` with the REST base URL, a WordPress nonce, customer ID, loyalty balance, current/next level and cart URLs
+- PDP, cart and checkout pages expose `pageType`, `cartValue`, `currency`, product context and cart context through `window.lewWooCommerce`
+- selected WooCommerce variations and cart changes update `cartValue` and dispatch `lew:commerce-context-updated` for local personalization scripts
+- `identifier` contains the logged-in customer's e-mail address; `cartValueBasis` documents that award values exclude tax and cart discounts are included
+- Loyalty Engage templates should use `allAvailableLoyaltyShopProducts()` to render the full reward horizon; `availableProducts` only contains rewards the contact can buy now
+- personalization markup can declare levels with `data-lew-level` and `data-lew-required-points`; the storefront bridge marks current, achieved and locked levels automatically
+- reward cards can declare `data-lew-coin-price`, `data-lew-required-tier` and `data-lew-required-points`; unavailable cards remain visible and are disabled automatically
+- buttons with `data-lew-action="physical"` reserve the reward and add the matching WooCommerce SKU to the cart
+- buttons with `data-lew-action="discount"` claim the code, create the WooCommerce coupon and apply it to the active cart; for an empty cart the coupon is retained and applied automatically after the first product is added
+- client and webhook secrets are never exposed to the browser
+- loyalty cart items are forced to zero price and carry loyalty metadata into the order
+- loyalty account block can expose current tier, points, coins and next-tier data from synced customer meta
+
+### Frontend personalizations
+
+- Explicit personalization shortcodes ignore automatic page-placement restrictions. They remain subject to the module/rule being enabled and, in the multisite edition, shop targeting. Supported contexts include normal shortcode content, HTML blocks/widgets, WooCommerce short descriptions and product-summary/excerpt blocks. The template still needs appropriate context: a PDP-only template that requires a positive cartValue will not render on a generic page without product/cart context.
+
+- The tenant module and synchronous queue bootstrap load once in the document head when this shop has a configured tenant and at least one active rule. Slot triggers stay in the footer, so shortcodes discovered after the head still work. Multisite targeting is applied before deciding whether a shop loads the engine.
+
+- open **Loyalty Engage > Personalisaties** and paste the tenant-specific `<script>...</script>` loader from Loyalty Engage, or enter its tenant UUID; the plugin stores only the UUID and loads `https://le-cloud.app/f/t/<tenant-UUID>.js` as a module
+- add one rule per public personalization ID, with a unique shortcode key
+- select **Only shortcode** to place `[loyalty_engage_personalization id="pdp-punten"]` in a page or **Automatic** to show it on all product pages, the cart, checkout, or selected WordPress pages
+- enable **Customer data** only for personalizations that need a contact identifier; it is sent only for logged-in customers
+- enable **CartValue** for templates using `getOrderAward(cartValue)`; product variation and cart updates trigger a new render when the value changes
+- set the HTML insertion method in Loyalty Engage to replace the target's content for personalizations that update with `cartValue`
+- allow the shop domain in **Loyalty Engage > Developer > Frontend settings > Allowed domains**
+- the tenant loader must be configured in WordPress; arbitrary inline JavaScript is not stored or executed, and API credentials are not exposed to the browser
+
+### Discount rewards
+
+- discount reward claims call Loyalty Engage
+- returned reward codes are stored locally
+- delivery can be configured as a WooCommerce cart coupon or a Loyalty Engage e-mail gift card
+- e-mail gift card mode does not create or apply a WooCommerce coupon; the voucher value is configured on the Loyalty Engage reward
+- existing personalization JavaScript remains compatible: in e-mail gift card mode its configured cart redirect remains on the loyalty shop page
+- the real WooCommerce cart URL remains available to new personalization blocks as `window.lewWooCommerce.actualCartUrl`
+- in WooCommerce coupon mode, a matching coupon is created or updated automatically
+- order completion marks claimed Loyalty Engage discount codes as redeemed
+- the former free-amount points redemption form is retired; coin-priced discount rewards use the existing reward claim flow
+
+### Free shipping
+
+- optional tier-based free shipping can be enabled in settings
+- when a logged-in customer has a matching loyalty tier, all available shipping rates are set to free
+- tier matching is based on synced loyalty customer meta and is case-insensitive
+
+### Personalization
+
+- disabled by default
+- once enabled, selected WooCommerce product tags are saved on users after purchases
+- reward products with matching tags are ranked first, or exclusively shown when `only_matching` is selected
+
+## Security model
+
+- customer-facing POST endpoints require a logged-in user and ownership of the customer resource
+- Loyalty Engage callback endpoint `/customer-update` requires the configured webhook secret
+- frontend authenticated requests use the WordPress REST nonce
+
+## Settings
+
+Admin page:
+
+- Client ID
+- Client Secret
+- Webhook Secret
+- Module enable toggle
+- API base URL
+- Logging toggle
+- Order export toggle
+- Purchase export statuses
+- Return export toggle
+- Review export toggle
+- Customer sync toggle
+- Discount reward delivery mode
+- Max loyalty products per cart
+- Minimum non-loyalty subtotal
+- Minimum subtotal error messages
+- Coin redemption guidance (legacy points-redemption settings are removed on save)
+- Product page earning-points toggle, rate and label
+- Free shipping tier settings
+- Frontend loyalty meta visibility and labels
+- Loyalty personalization toggle
+- Frontend personalization script URL and rules
+- Personalization tags
+- Personalization display mode
+
+## REST endpoints
+
+- `GET /wp-json/loyalty-engage/v1/products`
+- `GET /wp-json/loyalty-engage/v1/loyalty-status?customer_ref=123`
+- `POST /wp-json/loyalty-engage/v1/discount/{sku}/{customer_ref}`
+- `POST /wp-json/loyalty-engage/v1/physical-redeem/{sku}/{customer_ref}`
+- `POST /wp-json/loyalty-engage/v1/cart-remove/{sku}/{customer_ref}`
+- `POST /wp-json/loyalty-engage/v1/customer-update`
+- Legacy `/redeem-points` routes return HTTP 410; use coin-priced rewards through `/discount/{sku}/{customer_ref}` instead
+
+## Database tables
+
+- `wp_lew_order_outbox`
+- `wp_lew_refund_outbox`
+- `wp_lew_review_outbox`
+- `wp_lew_discount_codes`
+- `wp_lew_physical_redemptions`
+
+## Logging
+
+Plugin logging goes through the WooCommerce logger under source:
+
+```text
+loyalty-engage-woocommerce
+```
+
+## Updates through WordPress
+
+The plugin uses GitHub Releases as its update source through the WordPress `Update URI` mechanism.
+
+- WordPress checks the latest public GitHub release and compares its tag with the installed plugin version.
+- The release must have a semantic tag such as `v1.5.8` and an asset named `loyalty-engage-woocommerce.zip`.
+- Pushing a matching version tag runs `.github/workflows/release.yml`, validates the plugin version and publishes the correctly structured ZIP automatically.
+- Version `1.5.8` must be installed manually once on existing shops; subsequent releases appear in the normal WordPress Plugins update screen.
+- The release response is cached for six hours; WordPress itself also controls how often plugin update checks run.
+
+Release commands after updating both plugin version declarations:
+
+```bash
+git tag v1.5.8
+git push origin v1.5.8
+```
+
+## Release checklist
+
+1. Install plugin in a WooCommerce staging environment.
+2. Configure Client ID, Client Secret and Webhook Secret.
+3. Verify WP-Cron or replace it with a real server cron.
+4. Test customer registration sync.
+5. Test one paid order, one guest order and one refund.
+6. Test one discount reward claim and validate the WooCommerce coupon.
+7. Test one physical reward claim and verify zero pricing in cart and order.
+8. Test a coin-priced discount reward claim and verify that level points remain unchanged.
+9. Test tier-based free shipping with qualifying and non-qualifying customers.
+10. Test loyalty personalization with enabled and disabled states.
+11. Test approved review export and confirm the review outbox drains correctly.
+
+## Remaining validation before live
+
+This project is hardened substantially, but still needs full platform validation in a real WooCommerce install before a production release on a live merchant store:
+
+- HPOS compatibility validation on the target WooCommerce version
+- real checkout and refund flow validation with the merchant theme
+- confirm coin-priced reward balance and claim behavior against the target Loyalty Engage tenant
+- final decision on guest checkout behavior for loyalty exports
+- any merchant-specific barcode plugin compatibility

@@ -1,0 +1,61 @@
+name: Release WordPress multisite plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate multisite version and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=loyalty-engage-woocommerce-multisite.php
+          version="$(sed -n "s/define('LEWM_PLUGIN_VERSION', '\([^']*\)').*/\1/p" "$file")"
+          test -n "$version"
+          test "$version" = "${GITHUB_REF_NAME#v}"
+          test "$(sed -n 's/^ \* Version: //p' "$file")" = "$version"
+          grep -q '^ \* Network: true' "$file"
+          test ! -f loyalty-engage-woocommerce.php
+
+      - name: Run release checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l loyalty-engage-woocommerce-multisite.php
+          while IFS= read -r -d '' file; do php -l "$file"; done < <(find includes tests -name '*.php' -print0)
+          for test in tests/*.php; do php "$test"; done
+          for script in assets/js/*.js; do node --check "$script"; done
+          node --test tests/*.test.cjs
+          git diff --check
+
+      - name: Build separate multisite ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/loyalty-engage-woocommerce-multisite
+          cp loyalty-engage-woocommerce-multisite.php README.md MULTISITE-DEVELOPMENT.md dist/loyalty-engage-woocommerce-multisite/
+          cp -R assets includes dist/loyalty-engage-woocommerce-multisite/
+          cd dist
+          zip -r ../loyalty-engage-woocommerce-multisite.zip loyalty-engage-woocommerce-multisite
+
+      - name: Publish separate GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" loyalty-engage-woocommerce-multisite.zip \
+            --verify-tag --title "Loyalty Engage WooCommerce Multisite ${GITHUB_REF_NAME#v}" \
+            --generate-notes "${flags[@]}"

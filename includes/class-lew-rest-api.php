@@ -1,0 +1,622 @@
+<?php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class LEWM_Rest_API
+{
+    public static function boot(): void
+    {
+        add_action('rest_api_init', [self::class, 'register_routes']);
+    }
+
+    public static function register_routes(): void
+    {
+        register_rest_route('loyalty-engage/v1', '/products', [
+            'methods' => 'GET',
+            'callback' => [self::class, 'get_products'],
+            'permission_callback' => '__return_true',
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/context', [
+            'methods' => 'GET',
+            'callback' => [self::class, 'get_frontend_context'],
+            'permission_callback' => '__return_true',
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/loyalty-status', [
+            'methods' => 'GET',
+            'callback' => [self::class, 'get_loyalty_status'],
+            'permission_callback' => [self::class, 'can_access_customer_query'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/discount/(?P<sku>[^/]+)/(?P<customer_ref>[^/]+)', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'redeem_discount'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/physical-redeem/(?P<sku>[^/]+)/(?P<customer_ref>[^/]+)', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'redeem_physical'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/cart-remove/(?P<sku>[^/]+)/(?P<customer_ref>[^/]+)', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'cart_remove'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/customer-update', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'customer_update'],
+            'permission_callback' => [self::class, 'can_process_customer_update'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/redeem-points/(?P<customer_ref>[^/]+)', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'legacy_points_redemption_disabled'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/redeem-points/(?P<customer_ref>[^/]+)', [
+            'methods' => 'DELETE',
+            'callback' => [self::class, 'legacy_points_redemption_disabled'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/redeem-points/(?P<customer_ref>[^/]+)/info', [
+            'methods' => 'GET',
+            'callback' => [self::class, 'legacy_points_redemption_disabled'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+
+        register_rest_route('loyalty-engage/v1', '/redeem-points/(?P<customer_ref>[^/]+)/preview', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'legacy_points_redemption_disabled'],
+            'permission_callback' => [self::class, 'can_access_customer_route'],
+        ]);
+    }
+
+    public static function get_products(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response([
+                'success' => false,
+                'message' => 'Loyalty Engage module is disabled.',
+            ], 503);
+        }
+
+        $products = LEWM_Storefront::get_cached_catalog_products();
+        $customer_ref = (string) ($request->get_param('customerId') ?: $request->get_param('customerEmail') ?: '');
+
+        $matched = array_values(array_map(
+            static function (array $product) {
+                $match = LEWM_Storefront::match_loyalty_product_to_wc_product($product);
+                return LEWM_Storefront::build_matched_product($product, $match);
+            },
+            $products
+        ));
+
+        if (!$request->get_param('includeAll')) {
+            $matched = LEWM_Storefront::personalize_products($matched, $customer_ref);
+        }
+
+        return new WP_REST_Response([
+            'success' => true,
+            'matchedProducts' => $matched,
+        ]);
+    }
+
+    public static function get_frontend_context(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response([
+                'success' => false,
+                'message' => 'Loyalty Engage module is disabled.',
+            ], 503);
+        }
+
+        $page_type = sanitize_key((string) $request->get_param('pageType'));
+        $product_id = absint($request->get_param('productId'));
+
+        return new WP_REST_Response([
+            'success' => true,
+            'context' => LEWM_Storefront::get_frontend_context($page_type, $product_id),
+        ]);
+    }
+
+    public static function get_loyalty_status(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Loyalty Engage module is disabled.'], 503);
+        }
+
+        $customer_ref = (string) $request->get_param('customer_ref');
+        $customer = LEWM_Storefront::resolve_customer($customer_ref);
+        if (!$customer) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Customer not found'], 404);
+        }
+
+        $email = $customer->user_email;
+        $client = new LEWM_Loyalty_Engage_Client();
+        $response = $client->request('/contact/' . rawurlencode($email) . '/loyalty_status', 'GET');
+        if (!empty($response['success'])) {
+            LEWM_Network::sync_customer($customer->ID, LEWM_Network::status_data($response['body'] ?? null));
+        }
+
+        return new WP_REST_Response([
+            'success' => !empty($response['success']),
+            'user_data' => LEWM_Network::status_data($response['body'] ?? null),
+            'message' => $response['message'],
+        ], (int) $response['status']);
+    }
+
+    public static function redeem_discount(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Loyalty Engage module is disabled.'], 503);
+        }
+
+        $sku = (string) $request['sku'];
+        $customer = LEWM_Storefront::resolve_customer((string) $request['customer_ref']);
+        if (!$customer) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Customer not found'], 404);
+        }
+
+        $reward = LEWM_Storefront::find_reward_by_sku($sku);
+        if (!$reward || ($reward['type'] ?? '') !== 'discount_code') {
+            return new WP_REST_Response(['success' => false, 'message' => 'Reward not found'], 404);
+        }
+
+        $payload = $request->get_json_params();
+        $client = new LEWM_Loyalty_Engage_Client();
+        $response = $client->request(
+            '/loyalty/shop/' . rawurlencode($customer->user_email) . '/cart/buy_discount_code',
+            'POST',
+            [
+                'sku' => $sku,
+                'cartSubtotal' => isset($payload['cartSubtotal']) ? (float) $payload['cartSubtotal'] : 0,
+            ]
+        );
+
+        if (!empty($response['success'])) { LEWM_Network::refresh_customer($customer->ID); }
+        self::maybe_store_discount_code($sku, $customer->user_email, $response);
+        $normalized = self::normalize_api_response($response);
+        $settings = LEWM_Settings::get_settings();
+        $delivery_mode = (string) ($settings['discount_reward_mode'] ?? 'woocommerce_coupon');
+
+        if ($delivery_mode === 'email_gift_card') {
+            $normalized['deliveryMode'] = 'email_gift_card';
+            $normalized['giftCardEmailed'] = !empty($response['success']);
+            $normalized['couponApplied'] = false;
+            $normalized['couponPending'] = false;
+            $normalized['redirectToCart'] = false;
+
+            if (!empty($response['success'])) {
+                unset($normalized['discountCode'], $normalized['discount_code'], $normalized['code']);
+                $normalized['message'] = 'Je cadeaukaart wordt per e-mail verzonden.';
+                LEWM_Logger::info('Loyalty Engage e-mail gift card created', [
+                    'sku' => $sku,
+                    'email' => $customer->user_email,
+                ]);
+            }
+        } else {
+            $coupon_result = self::maybe_create_coupon($sku, $customer->user_email, $reward, $response);
+            $normalized['deliveryMode'] = 'woocommerce_coupon';
+            $normalized['giftCardEmailed'] = false;
+            $normalized['couponApplied'] = $coupon_result['applied'];
+            $normalized['couponPending'] = $coupon_result['pending'];
+            $normalized['redirectToCart'] = true;
+        }
+
+        return new WP_REST_Response($normalized, (int) $response['status']);
+    }
+
+    public static function redeem_physical(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Loyalty Engage module is disabled.'], 503);
+        }
+
+        $sku = (string) $request['sku'];
+        $customer = LEWM_Storefront::resolve_customer((string) $request['customer_ref']);
+        if (!$customer) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Customer not found'], 404);
+        }
+
+        $cart = WC()->cart;
+        if (!$cart instanceof WC_Cart) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Winkelmand niet beschikbaar.'], 500);
+        }
+
+        $rule_message = null;
+        if (!LEWM_Storefront::can_add_loyalty_product($cart, $rule_message)) {
+            return new WP_REST_Response(['success' => false, 'message' => $rule_message ?: 'Loyalty product kan niet worden toegevoegd.'], 400);
+        }
+
+        $payload = $request->get_json_params();
+        $reward = LEWM_Storefront::find_reward_by_sku($sku);
+        if (!$reward || ($reward['type'] ?? '') !== 'physical') {
+            return new WP_REST_Response(['success' => false, 'message' => 'Reward not found'], 404);
+        }
+
+        $variant_id = isset($payload['variantId']) ? absint((string) $payload['variantId']) : 0;
+        if (!$variant_id) {
+            $match = LEWM_Storefront::match_loyalty_product_to_wc_product($reward);
+            $variant_id = isset($match['variantId']) ? absint((string) $match['variantId']) : 0;
+        }
+        if (!$variant_id) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Variant not found'], 404);
+        }
+
+        $client = new LEWM_Loyalty_Engage_Client();
+        $response = $client->request(
+            '/loyalty/shop/' . rawurlencode($customer->user_email) . '/cart/add',
+            'POST',
+            [
+                'sku' => $sku,
+                'variantId' => $variant_id,
+                'cartSubtotal' => isset($payload['cartSubtotal']) ? (float) $payload['cartSubtotal'] : 0,
+                'cartSkus' => isset($payload['cartSkus']) && is_array($payload['cartSkus']) ? $payload['cartSkus'] : [],
+            ]
+        );
+
+        if (!empty($response['success'])) { LEWM_Network::refresh_customer($customer->ID); }
+        self::maybe_store_redemption($sku, $customer->user_email, $response);
+        if (empty($response['success'])) {
+            return new WP_REST_Response(self::normalize_api_response($response), (int) $response['status']);
+        }
+
+        $cart_result = self::add_reward_product_to_cart($variant_id, $sku, $response);
+        if (is_wp_error($cart_result)) {
+            return new WP_REST_Response([
+                'success' => false,
+                'message' => $cart_result->get_error_message(),
+            ], 500);
+        }
+
+        $normalized = self::normalize_api_response($response);
+        $normalized['cartItemKey'] = $cart_result['cart_item_key'];
+        $normalized['cartUrl'] = wc_get_cart_url();
+        $normalized['checkoutUrl'] = wc_get_checkout_url();
+
+        return new WP_REST_Response($normalized, 200);
+    }
+
+    public static function cart_remove(WP_REST_Request $request): WP_REST_Response
+    {
+        if (!LEWM_Settings::is_module_enabled()) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Loyalty Engage module is disabled.'], 503);
+        }
+
+        $sku = (string) $request['sku'];
+        $customer = LEWM_Storefront::resolve_customer((string) $request['customer_ref']);
+        if (!$customer) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Customer not found'], 404);
+        }
+
+        $client = new LEWM_Loyalty_Engage_Client();
+        $response = $client->request(
+            '/loyalty/shop/' . rawurlencode($customer->user_email) . '/cart/remove',
+            'DELETE',
+            ['sku' => $sku, 'quantity' => 1]
+        );
+
+        return new WP_REST_Response(self::normalize_api_response($response), (int) $response['status']);
+    }
+
+    public static function customer_update(WP_REST_Request $request): WP_REST_Response
+    {
+        $payload = $request->get_json_params();
+        $customer_ref = (string) ($payload['email'] ?? $payload['customerId'] ?? '');
+        $customer = LEWM_Storefront::resolve_customer($customer_ref);
+        if (!$customer) {
+            return new WP_REST_Response(['success' => false, 'message' => 'Customer not found'], 404);
+        }
+
+        if (!empty($payload['loyaltyData']) && is_array($payload['loyaltyData'])) {
+            LEWM_Network::sync_customer($customer->ID, $payload['loyaltyData']);
+        }
+
+        return new WP_REST_Response(['success' => true, 'customerId' => $customer->ID]);
+    }
+
+    public static function legacy_points_redemption_disabled(WP_REST_Request $request): WP_REST_Response
+    {
+        return new WP_REST_Response([
+            'success' => false,
+            'message' => 'Levelpunten kunnen niet worden ingewisseld. Kies een cadeaubon met coins in de loyaltyshop.',
+        ], 410);
+    }
+
+    public static function can_access_customer_route(WP_REST_Request $request)
+    {
+        if (!is_user_logged_in()) {
+            return new WP_Error('lew_unauthorized', 'Authentication required.', ['status' => 401]);
+        }
+
+        $customer = LEWM_Storefront::resolve_customer((string) $request['customer_ref']);
+        if (!$customer) {
+            return new WP_Error('lew_customer_not_found', 'Customer not found.', ['status' => 404]);
+        }
+
+        $current_user_id = get_current_user_id();
+        if ($current_user_id !== (int) $customer->ID && !current_user_can('manage_woocommerce')) {
+            return new WP_Error('lew_forbidden', 'You cannot access this customer resource.', ['status' => 403]);
+        }
+
+        return true;
+    }
+
+    public static function can_access_customer_query(WP_REST_Request $request)
+    {
+        $request->set_param('customer_ref', (string) ($request->get_param('customer_ref') ?: $request->get_param('customerId') ?: $request->get_param('customerEmail') ?: ''));
+        return self::can_access_customer_route($request);
+    }
+
+    public static function can_process_customer_update(WP_REST_Request $request)
+    {
+        $settings = LEWM_Settings::get_settings();
+        $secret = trim((string) ($settings['webhook_secret'] ?? ''));
+        if ($secret === '') {
+            return new WP_Error('lew_webhook_secret_missing', 'Webhook secret not configured.', ['status' => 503]);
+        }
+
+        $provided = trim((string) $request->get_header('x-lew-signature'));
+        if ($provided === '') {
+            $provided = trim((string) $request->get_header('authorization'));
+        }
+
+        if (!hash_equals($secret, preg_replace('/^Bearer\s+/i', '', $provided))) {
+            return new WP_Error('lew_invalid_signature', 'Invalid webhook signature.', ['status' => 401]);
+        }
+
+        return true;
+    }
+
+    private static function normalize_api_response(array $response): array
+    {
+        $body = is_array($response['body']) ? $response['body'] : [];
+        return array_merge([
+            'success' => !empty($response['success']),
+            'message' => (string) ($response['message'] ?? ''),
+        ], $body);
+    }
+
+    private static function maybe_store_discount_code(string $sku, string $email, array $response): void
+    {
+        if (empty($response['success'])) {
+            return;
+        }
+
+        global $wpdb;
+
+        $body = is_array($response['body']) ? $response['body'] : [];
+        $discount_code = (string) ($body['discountCode'] ?? $body['discount_code'] ?? '');
+        if ($discount_code === '') {
+            return;
+        }
+
+        $table = $wpdb->prefix . 'lewm_discount_codes';
+        $now = current_time('mysql', true);
+        $wpdb->replace($table, [
+            'discount_code' => $discount_code,
+            'customer_email' => $email,
+            'sku' => $sku,
+            'meta' => wp_json_encode($body),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private static function maybe_create_coupon(string $sku, string $email, array $reward, array $response): array
+    {
+        $result = ['applied' => false, 'pending' => false];
+        if (empty($response['success'])) {
+            return $result;
+        }
+
+        $body = is_array($response['body']) ? $response['body'] : [];
+        $discount_code = (string) ($body['discountCode'] ?? $body['discount_code'] ?? '');
+        if ($discount_code === '') {
+            return $result;
+        }
+
+        $coupon = new WC_Coupon();
+        $existing_id = wc_get_coupon_id_by_code($discount_code);
+        if ($existing_id) {
+            $coupon = new WC_Coupon($existing_id);
+        }
+
+        $discount_amount = isset($body['discountAmount']) ? (float) $body['discountAmount'] : 0.0;
+        $discount_percentage = isset($body['discountPercentage']) ? (float) $body['discountPercentage'] : 0.0;
+        $coupon_type = 'fixed_cart';
+        $amount = $discount_amount;
+
+        if (!empty($body['freeShipping'])) {
+            $coupon_type = 'fixed_cart';
+            $amount = 0;
+            $coupon->set_free_shipping(true);
+        } elseif ($discount_percentage > 0) {
+            $coupon_type = 'percent';
+            $amount = $discount_percentage;
+        } elseif ($amount <= 0 && isset($reward['discountAmount'])) {
+            $amount = (float) $reward['discountAmount'];
+        }
+
+        if ($amount < 0) {
+            $amount = 0;
+        }
+
+        $coupon->set_code($discount_code);
+        $coupon->set_amount($amount);
+        $coupon->set_discount_type($coupon_type);
+        $coupon->set_individual_use(true);
+        $coupon->set_usage_limit(1);
+        $coupon->set_usage_limit_per_user(1);
+        $coupon->set_email_restrictions([$email]);
+        $coupon->set_description(sprintf('Loyalty Engage reward for %s (%s)', $email, $sku));
+        $coupon->set_virtual(true);
+
+        $expires_at = !empty($body['expiresAt']) ? strtotime((string) $body['expiresAt']) : (time() + (3 * DAY_IN_SECONDS));
+        if ($expires_at) {
+            $coupon->set_date_expires($expires_at);
+        }
+
+        try {
+            $coupon->save();
+
+            if (function_exists('WC') && WC()->cart instanceof WC_Cart) {
+                if (WC()->customer instanceof WC_Customer && WC()->customer->get_billing_email() === '') {
+                    WC()->customer->set_billing_email($email);
+                }
+                $result['applied'] = WC()->cart->has_discount($discount_code) || WC()->cart->apply_coupon($discount_code);
+            }
+
+            if ($result['applied']) {
+                self::clear_pending_coupon($email);
+            } else {
+                self::store_pending_coupon($discount_code, $email);
+                $result['pending'] = true;
+            }
+
+            LEWM_Storefront::persist_cart_session();
+
+            LEWM_Logger::info('Created or updated WooCommerce coupon for loyalty reward', [
+                'discount_code' => $discount_code,
+                'coupon_type' => $coupon_type,
+                'amount' => $amount,
+                'email' => $email,
+                'coupon_applied' => $result['applied'],
+                'coupon_pending' => $result['pending'],
+            ]);
+            return $result;
+        } catch (Throwable $throwable) {
+            LEWM_Logger::error('Failed to create WooCommerce coupon for loyalty reward', [
+                'discount_code' => $discount_code,
+                'message' => $throwable->getMessage(),
+            ]);
+            return $result;
+        }
+    }
+
+    private static function store_pending_coupon(string $discount_code, string $email): void
+    {
+        if (function_exists('WC') && WC()->session) {
+            WC()->session->set('lewm_shop_' . get_current_blog_id() . '_pending_coupon', $discount_code);
+        }
+
+        $user = get_user_by('email', $email);
+        if ($user instanceof WP_User) {
+            update_user_meta($user->ID, 'lewm_shop_' . get_current_blog_id() . '_pending_coupon', $discount_code);
+        }
+    }
+
+    private static function clear_pending_coupon(string $email): void
+    {
+        if (function_exists('WC') && WC()->session) {
+            WC()->session->set('lewm_shop_' . get_current_blog_id() . '_pending_coupon', null);
+        }
+
+        $user = get_user_by('email', $email);
+        if ($user instanceof WP_User) {
+            delete_user_meta($user->ID, 'lewm_shop_' . get_current_blog_id() . '_pending_coupon');
+        }
+    }
+
+    private static function maybe_store_redemption(string $sku, string $email, array $response): void
+    {
+        if (empty($response['success'])) { return; }
+        global $wpdb;
+
+        $body = is_array($response['body']) ? $response['body'] : [];
+        $discount_code = (string) ($body['discountCode'] ?? $body['discount_code'] ?? '');
+        if ($discount_code === '') {
+            return;
+        }
+
+        $table = $wpdb->prefix . 'lewm_physical_redemptions';
+        $now = current_time('mysql', true);
+        $wpdb->replace($table, [
+            'discount_code' => $discount_code,
+            'customer_email' => $email,
+            'sku' => $sku,
+            'status' => 'pending',
+            'meta' => wp_json_encode($body),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private static function add_reward_product_to_cart(int $product_or_variation_id, string $sku, array $response)
+    {
+        if (!function_exists('WC') || !WC()->cart) {
+            return new WP_Error('lew_cart_unavailable', 'Cart is not available.');
+        }
+
+        $product = wc_get_product($product_or_variation_id);
+        if (!$product) {
+            return new WP_Error('lew_product_missing', 'Reward product could not be loaded.');
+        }
+
+        $quantity = 1;
+        $cart_item_data = [
+            'lew_loyalty_reward' => true,
+            'lew_loyalty_sku' => $sku,
+            'lew_loyalty_discount_code' => (string) ((is_array($response['body']) ? ($response['body']['discountCode'] ?? $response['body']['discount_code'] ?? '') : '')),
+        ];
+
+        $variation_id = 0;
+        $variation = [];
+        $product_id = $product->get_id();
+
+        if ($product instanceof WC_Product_Variation) {
+            $variation_id = $product->get_id();
+            $product_id = $product->get_parent_id();
+            $variation = $product->get_attributes();
+        }
+
+        $cart_item_key = WC()->cart->add_to_cart($product_id, $quantity, $variation_id, $variation, $cart_item_data);
+        if (!$cart_item_key) {
+            return new WP_Error('lew_add_to_cart_failed', 'Could not add reward product to cart.');
+        }
+
+        LEWM_Storefront::persist_cart_session();
+
+        return [
+            'cart_item_key' => $cart_item_key,
+        ];
+    }
+
+    private static function expand_loyalty_meta_keys(string $incoming_key): array
+    {
+        $normalized = sanitize_key($incoming_key);
+        $map = [
+            'current_tier' => ['lew_current_tier', 'lew_currenttier'],
+            'currenttier' => ['lew_current_tier', 'lew_currenttier'],
+            'le_current_tier' => ['lew_current_tier', 'lew_le_current_tier', 'lew_currenttier', 'lew_le_currenttier'],
+            'points' => ['lew_points'],
+            'le_points' => ['lew_points', 'lew_le_points'],
+            'available_coins' => ['lew_availableCoins', 'lew_available_coins'],
+            'availablecoins' => ['lew_availableCoins', 'lew_available_coins'],
+            'le_available_coins' => ['lew_availableCoins', 'lew_le_available_coins'],
+            'next_tier' => ['lew_next_tier', 'lew_nexttier'],
+            'nexttier' => ['lew_next_tier', 'lew_nexttier'],
+            'le_next_tier' => ['lew_next_tier', 'lew_le_next_tier'],
+            'points_to_next_tier' => ['lew_points_to_next_tier', 'lew_pointstonexttier'],
+            'pointstonexttier' => ['lew_points_to_next_tier', 'lew_pointstonexttier'],
+            'le_points_to_next_tier' => ['lew_points_to_next_tier', 'lew_le_points_to_next_tier'],
+            'reserved_coins' => ['lew_reserved_coins', 'lew_reservedcoins'],
+            'reservedcoins' => ['lew_reserved_coins', 'lew_reservedcoins'],
+            'le_reserved_coins' => ['lew_reserved_coins', 'lew_le_reserved_coins'],
+            'expiring_points_30d' => ['lew_expiring_points_30d', 'lew_expiringpoints30d'],
+            'expiringpoints30d' => ['lew_expiring_points_30d', 'lew_expiringpoints30d'],
+            'le_expiring_points_30d' => ['lew_expiring_points_30d', 'lew_le_expiring_points_30d'],
+        ];
+
+        return $map[$normalized] ?? ['lew_' . $normalized];
+    }
+}
