@@ -1,7 +1,7 @@
 # Loyalty Engage WooCommerce Multisite
 
-Status: validated in a local WordPress/WooCommerce multisite sandbox with an API double; not yet validated against a real Loyalty Engage tenant.
-Version: 0.4.0-alpha.2. The single-site project and release stream are unchanged.
+Status: local multisite integration tested; real test-tenant authentication, catalog, balances, voucher claim and personalization rendering verified. The remaining rollout checks below still apply.
+Version: 0.4.0, normal release channel. The single-site project and release stream are unchanged.
 
 ## Separate identity
 
@@ -10,6 +10,7 @@ Version: 0.4.0-alpha.2. The single-site project and release stream are unchanged
 - Update URI, release asset name and updater cache are distinct from single-site.
 - Dedicated repository and release workflow: Loyalty-Engage/loyalty-engage-woocommerce-multisite. The workflow packages only the multisite entrypoint, includes and assets; local fixtures and credentials are excluded from the ZIP.
 - Alpha versions are published as prereleases, not offered through the normal stable WordPress updater.
+- Version 0.4.0 is a normal release and is available through the multisite updater. It can replace the earlier multisite alphas, never the single-site plugin.
 - Running alongside the single-site plugin is not supported; multisite runtime refuses to start when the single-site plugin is loaded.
 
 ## Implemented

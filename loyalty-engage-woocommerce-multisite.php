@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Loyalty Engage for WooCommerce Multisite (Development)
+ * Plugin Name: Loyalty Engage for WooCommerce Multisite
  * Description: Loyalty Engage integration for WooCommerce with order export, returns, loyalty rewards, discount redemption and customer sync.
- * Version: 0.4.0-alpha.2
+ * Version: 0.4.0
  * Network: true
  * Author: Loyalty Engage B.V.
  * Requires at least: 6.5
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('LEWM_PLUGIN_VERSION', '0.4.0-alpha.2');
+define('LEWM_PLUGIN_VERSION', '0.4.0');
 define('LEWM_PLUGIN_FILE', __FILE__);
 define('LEWM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('LEWM_PLUGIN_URL', plugin_dir_url(__FILE__));

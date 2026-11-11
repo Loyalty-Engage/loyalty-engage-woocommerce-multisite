@@ -1,9 +1,11 @@
-# Loyalty Engage for WooCommerce Multisite (Development)
+# Loyalty Engage for WooCommerce Multisite
 
-This is a separate development project, version 0.4.0-alpha.2. It is not a
-production-ready multisite release. See [MULTISITE-DEVELOPMENT.md](MULTISITE-DEVELOPMENT.md)
-for the separation and remaining requirements. The documentation below describes
-the inherited single-site features, not completed multisite support.
+Version 0.4.0 is published through the normal multisite release channel so the
+WordPress updater can offer it to multisite installations. Its repository, plugin
+directory and update channel remain separate from the single-site edition.
+See [MULTISITE-DEVELOPMENT.md](MULTISITE-DEVELOPMENT.md) for tested flows and the
+remaining production-rollout checks. Normal release status does not replace
+merchant-specific staging validation or a database backup.
 
 ## Network setup (alpha)
 
