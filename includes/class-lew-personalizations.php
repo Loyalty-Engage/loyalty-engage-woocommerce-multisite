@@ -23,6 +23,7 @@ class LEWM_Personalizations
         add_action('wp_enqueue_scripts', [self::class, 'enqueue_for_auto_pages'], 30);
         add_filter('script_loader_tag', [self::class, 'module_script_tag'], 10, 2);
         add_action('woocommerce_single_product_summary', [self::class, 'render_product_auto'], 35);
+        add_action('woocommerce_thankyou', [self::class, 'render_thankyou_auto'], 20);
         add_filter('the_content', [self::class, 'append_page_auto'], 30);
     }
 
@@ -121,7 +122,7 @@ class LEWM_Personalizations
             $used_keys[$key] = true;
             $placement = ($row['placement'] ?? '') === 'auto' ? 'auto' : 'shortcode';
             $page_type = (string) ($row['page_type'] ?? 'product');
-            if (!in_array($page_type, ['product', 'cart', 'checkout', 'pages'], true)) {
+            if (!in_array($page_type, ['product', 'cart', 'checkout', 'thankyou', 'pages'], true)) {
                 $page_type = 'product';
             }
             $site_ids = array_values(array_intersect($network_sites, array_map('absint', (array) ($row['site_ids'] ?? []))));
@@ -235,6 +236,7 @@ class LEWM_Personalizations
                 <option value="product" <?php selected($rule['page_type'] ?? 'product', 'product'); ?>>Alle productpagina's</option>
                 <option value="cart" <?php selected($rule['page_type'] ?? '', 'cart'); ?>>Winkelwagen</option>
                 <option value="checkout" <?php selected($rule['page_type'] ?? '', 'checkout'); ?>>Afrekenen</option>
+                <option value="thankyou" <?php selected($rule['page_type'] ?? '', 'thankyou'); ?>>Bedankpagina</option>
                 <option value="pages" <?php selected($rule['page_type'] ?? '', 'pages'); ?>>Geselecteerde pagina's</option>
             </select></label>
             <label>Geselecteerde pagina's per shop <select name="<?php echo esc_attr($name); ?>[page_targets][]" multiple size="6">
@@ -301,6 +303,15 @@ class LEWM_Personalizations
         }
     }
 
+    public static function render_thankyou_auto(): void
+    {
+        foreach (self::get_settings()['rules'] as $rule) {
+            if ($rule['page_type'] === 'thankyou' && self::applies_automatically($rule) && empty(self::$rendered[$rule['key']])) {
+                echo self::container($rule['key']);
+            }
+        }
+    }
+
     public static function append_page_auto(string $content): string
     {
         if (!is_main_query() || !in_the_loop() || !is_singular('page')) {
@@ -323,6 +334,7 @@ class LEWM_Personalizations
             case 'product': return is_product();
             case 'cart': return is_cart();
             case 'checkout': return is_checkout() && !is_order_received_page();
+            case 'thankyou': return is_order_received_page();
             case 'pages':
                 $ids = array_values(array_filter(array_map('intval', explode(',', $rule['page_ids']))));
                 return $ids !== [] && is_page($ids);

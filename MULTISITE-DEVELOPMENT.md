@@ -1,7 +1,7 @@
 # Loyalty Engage WooCommerce Multisite
 
 Status: validated in a local WordPress/WooCommerce multisite sandbox with an API double; not yet validated against a real Loyalty Engage tenant.
-Version: 0.4.0-alpha.1. The single-site project and release stream are unchanged.
+Version: 0.4.0-alpha.2. The single-site project and release stream are unchanged.
 
 ## Separate identity
 
