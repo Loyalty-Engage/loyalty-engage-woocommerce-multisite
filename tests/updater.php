@@ -2,7 +2,7 @@
 
 define('ABSPATH', __DIR__);
 define('HOUR_IN_SECONDS', 3600);
-define('LEWM_PLUGIN_VERSION', '0.4.0-alpha.2');
+define('LEWM_PLUGIN_VERSION', '0.4.0');
 define('LEWM_PLUGIN_FILE', 'loyalty-engage-woocommerce-multisite/loyalty-engage-woocommerce-multisite.php');
 function plugin_basename($file) { return $file; }
 function get_site_transient($key) { return false; }
@@ -22,12 +22,12 @@ function sanitize_textarea_field($value) { return $value; }
 require_once dirname(__DIR__) . '/includes/class-lew-updater.php';
 
 $release = [
-    'tag_name' => 'v0.4.0',
+    'tag_name' => 'v0.4.1',
     'assets' => [['name' => 'loyalty-engage-woocommerce-multisite.zip', 'browser_download_url' => 'https://example.com/plugin.zip']],
 ];
 $response = ['status' => 200, 'body' => $release];
 $update = LEWM_Updater::check_for_update(false, [], LEWM_PLUGIN_FILE, []);
-if ($update['version'] !== '0.4.0' || $update['package'] !== 'https://example.com/plugin.zip' || !version_compare($update['version'], LEWM_PLUGIN_VERSION, '>')) {
+if ($update['version'] !== '0.4.1' || $update['package'] !== 'https://example.com/plugin.zip' || !version_compare($update['version'], LEWM_PLUGIN_VERSION, '>')) {
     throw new RuntimeException('The previous plugin version must receive the installable release asset.');
 }
 if (LEWM_Updater::check_for_update('unchanged', [], 'other/plugin.php', []) !== 'unchanged') {

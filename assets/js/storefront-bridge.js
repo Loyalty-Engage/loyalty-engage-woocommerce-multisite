@@ -58,6 +58,20 @@
     });
   }
 
+  function refreshProductUsps(variation) {
+    document.querySelectorAll('[data-lewm-product-usp]').forEach(function (element) {
+      if (!variation || !Number.isFinite(Number(variation.display_price))) {
+        element.textContent = element.dataset.initialText || '';
+        return;
+      }
+      var rate = Math.max(0, Number(element.dataset.rate) || 0);
+      var points = Math.floor(Math.max(0, Number(variation.display_price)) * rate);
+      var formatted = points.toLocaleString(config.pointsLocale || undefined);
+      element.textContent = (element.dataset.label || 'Ontvang {{points}} Smaakpunten')
+        .split('{{points}}').join(formatted).split('{X}').join(formatted);
+    });
+  }
+
   function getLevelElements() {
     return Array.prototype.slice.call(document.querySelectorAll('[data-lew-level]'));
   }
@@ -159,9 +173,11 @@
     window.jQuery(document)
       .on('found_variation', 'form.variations_form', function (event, variation) {
         if (!variation) return;
+        refreshProductUsps(variation);
         setProductPrice(variation.lew_award_price === undefined ? variation.display_price : variation.lew_award_price, variation.variation_id);
       })
       .on('reset_data hide_variation', 'form.variations_form', function () {
+        refreshProductUsps(null);
         setProductPrice(config.product ? config.product.minPrice : 0, 0);
       })
       .on('updated_wc_div added_to_cart removed_from_cart', function () {

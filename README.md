@@ -1,6 +1,6 @@
 # Loyalty Engage for WooCommerce Multisite
 
-Version 0.4.0 is published through the normal multisite release channel so the
+Version 0.4.1 is published through the normal multisite release channel so the
 WordPress updater can offer it to multisite installations. Its repository, plugin
 directory and update channel remain separate from the single-site edition.
 See [MULTISITE-DEVELOPMENT.md](MULTISITE-DEVELOPMENT.md) for tested flows and the
@@ -14,6 +14,14 @@ merchant-specific staging validation or a database backup.
 3. Configure the displayed main-site customer-update callback in Loyalty Engage, with the shared secret. The callback works even when the main site has no WooCommerce shop.
 4. All plugin settings are central: **Algemeen**, **Orders en synchronisatie**, **Rewards en winkelwagen**, **Levels**, **Teksten en weergave**, and **Vormgeving**. Each section saves independently without resetting the others. Existing per-shop plugin options are ignored, not deleted. WooCommerce products, stock, currency, orders and coupons remain store-owned data, not plugin settings.
 5. Under **Network Admin > Loyalty Engage > Personalisaties**, set the shared tenant loader and personalization rules. Select shops per rule or enable all current/future shops. Selected pages are stored as site/page pairs, never shared numeric IDs. Shop administrators cannot edit these network rules.
+
+## Plain points for Elementor (0.4.1)
+
+- **Thank-you Purchase Summary:** replace the placeholder in the customer snippet with `do_shortcode('[loyalty_engage_order_points]')`. It returns only a localized number, or an empty string when no authorized order is available. It never returns HTML or the customer's balance. The corrected optional widget snippet is in [examples/elementor-purchase-summary-points.php](examples/elementor-purchase-summary-points.php); it adds a field once and leaves unrelated widgets unchanged. Do not install it in addition to an existing equivalent snippet.
+- **Third product USP:** put `[loyalty_engage_product_usp]` in the text of the third Elementor icon-list item. It renders an inline span, inherits the existing USP styling, and defaults to `Ontvang {{points}} Smaakpunten`. No card, blue background or extra icon is added. Existing icon-list markup supplies the checkmark.
+- The USP text is editable in **Network Admin > Loyalty Engage > Teksten en weergave > Tekst product-USP**. Both `{{points}}` and `{X}` are supported. Disable **Automatische puntenweergave op productpagina** and remove the previous blue personalization block from the template to prevent duplicate output. This does not disable the USP shortcode.
+- Both shortcodes estimate base level points using **Levelpunten per valuta-eenheid**. Order points use the discounted order-item total excluding tax, fees and shipping, with the same order-key/owner checks as thank-you CartValue. Product points use the displayed WooCommerce unit price and show a range before variation selection. Variation selection/reset updates the inline USP without changing product prices.
+- These are expected base points, not confirmed awarded points. Contact/tier multipliers, campaigns, delayed awards, refunds and later rule changes are not reproduced. The current configured base rate is used; historical award rules are not snapshotted. No coins are spent or adjusted. Verify the base rate/currency against the Loyalty Engage tenant and label the order field as expected points.
 
 The local WordPress/WooCommerce sandbox and its disposable credentials are kept outside version control and release packages. Local integration tests exercise two real shops with an API double; real Loyalty Engage contract and concurrency testing remain release requirements. The inherited per-shop personalization administration described later in this README is replaced by central network administration in this edition.
 

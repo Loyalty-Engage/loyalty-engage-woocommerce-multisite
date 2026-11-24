@@ -73,7 +73,22 @@ expect_value(30.0, 'Checkout context must keep using discounted product totals.'
 $wc->cart->total = 0;
 expect_value(0.0, 'Empty carts remain zero.');
 echo "Commerce context and thank-you order access tests passed.\n";
-class LEWM_Settings { public static function is_module_enabled(): bool { return true; } }
+class LEWM_Settings {
+    public static function is_module_enabled(): bool { return true; }
+    public static function get_settings(): array { return ['pdp_points_per_currency_unit' => 1.5]; }
+}
+function number_format_i18n($value) { return number_format($value, 0, ',', '.'); }
+$_GET['key'] = 'valid-order-key';
+$page = 'thankyou';
+if (LEWM_Storefront::order_points_shortcode() !== '150') { throw new RuntimeException('Order shortcode must return plain expected points, not a balance or markup.'); }
+$_GET['key'] = 'invalid';
+if (LEWM_Storefront::order_points_shortcode() !== '') { throw new RuntimeException('Invalid order access must not expose estimated points.'); }
+$_GET['key'] = 'valid-order-key';
+$user_id = 9;
+$order->customer = 7;
+if (LEWM_Storefront::order_points_shortcode() !== '') { throw new RuntimeException('Other customers must not see order points.'); }
+$page = 'other';
+if (LEWM_Storefront::order_points_shortcode() !== '') { throw new RuntimeException('Order points must not use ordinary page values.'); }
 require_once dirname(__DIR__) . '/includes/class-lew-personalizations.php';
 $matches = new ReflectionMethod(LEWM_Personalizations::class, 'applies_automatically');
 $rule = ['enabled' => 'yes', 'placement' => 'auto', 'page_type' => 'thankyou'];

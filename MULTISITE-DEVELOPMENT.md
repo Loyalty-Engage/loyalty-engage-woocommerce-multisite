@@ -1,7 +1,7 @@
 # Loyalty Engage WooCommerce Multisite
 
 Status: local multisite integration tested; real test-tenant authentication, catalog, balances, voucher claim and personalization rendering verified. The remaining rollout checks below still apply.
-Version: 0.4.0, normal release channel. The single-site project and release stream are unchanged.
+Version: 0.4.1, normal release channel. The single-site project and release stream are unchanged.
 
 ## Separate identity
 

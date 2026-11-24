@@ -13,6 +13,9 @@ class LEWM_Storefront
     {
         add_action('wp', [LEWM_Network::class, 'refresh_current_customer'], 1);
         add_shortcode('loyalty_engage_page', [self::class, 'render_loyalty_page']);
+        add_shortcode('loyalty_engage_order_points', [self::class, 'order_points_shortcode']);
+        add_shortcode('loyalty_engage_product_usp', [self::class, 'product_usp_shortcode']);
+        add_filter('elementor/widget/render_content', [self::class, 'render_elementor_points_shortcodes'], 20, 2);
         add_action('wp_enqueue_scripts', [self::class, 'register_assets']);
         add_filter('woocommerce_available_variation', [self::class, 'add_variation_loyalty_context'], 20, 3);
         add_action('woocommerce_single_product_summary', [self::class, 'render_product_earning_points'], 11);
@@ -64,6 +67,7 @@ class LEWM_Storefront
             'currency' => $frontend_context['currency'],
             'product' => $frontend_context['product'],
             'cart' => $frontend_context['cart'],
+            'pointsLocale' => str_replace('_', '-', get_locale()),
             // Existing personalization blocks redirect to cartUrl after a claim.
             // Keep them on the loyalty shop when the voucher is delivered by e-mail.
             'cartUrl' => $discount_reward_mode === 'email_gift_card' ? '#loyalty-shop' : $cart_url,
@@ -179,9 +183,21 @@ class LEWM_Storefront
             return;
         }
 
+        $points = self::get_product_earning_points_range($product, $settings);
+        if ($points === null) {
+            return;
+        }
+        $formatted_points = self::format_earning_points_range($points);
+        $label = (string) ($settings['pdp_points_label'] ?? 'Met dit product verdien je {{points}} punten.');
+        $message = str_replace('{{points}}', $formatted_points, $label);
+        echo '<p class="lew-product-earning-points">' . esc_html($message) . '</p>';
+    }
+
+    public static function get_product_earning_points_range(WC_Product $product, array $settings): ?array
+    {
         $rate = max(0, (float) ($settings['pdp_points_per_currency_unit'] ?? 0));
         if ($rate <= 0) {
-            return;
+            return null;
         }
 
         if ($product->is_type('variable')) {
@@ -200,17 +216,58 @@ class LEWM_Storefront
         $minimum_points = max(0, (int) ($points['min'] ?? 0));
         $maximum_points = max($minimum_points, (int) ($points['max'] ?? $minimum_points));
         if ($maximum_points <= 0) {
-            return;
+            return null;
         }
 
-        $formatted_points = number_format_i18n($minimum_points);
-        if ($maximum_points !== $minimum_points) {
-            $formatted_points .= ' - ' . number_format_i18n($maximum_points);
-        }
+        return ['min' => $minimum_points, 'max' => $maximum_points];
+    }
 
-        $label = (string) ($settings['pdp_points_label'] ?? 'Met dit product verdien je {{points}} punten.');
-        $message = str_replace('{{points}}', $formatted_points, $label);
-        echo '<p class="lew-product-earning-points">' . esc_html($message) . '</p>';
+    private static function format_earning_points_range(array $points): string
+    {
+        return number_format_i18n($points['min']) . ($points['max'] !== $points['min'] ? ' - ' . number_format_i18n($points['max']) : '');
+    }
+
+    public static function order_points_shortcode(): string
+    {
+        if (!LEWM_Settings::is_module_enabled() || !is_order_received_page()) {
+            return '';
+        }
+        $context = self::get_frontend_context();
+        if ($context['cartValueBasis'] !== 'discounted_order_items_excluding_tax') {
+            return '';
+        }
+        $settings = LEWM_Settings::get_settings();
+        $rate = max(0, (float) ($settings['pdp_points_per_currency_unit'] ?? 0));
+        return $rate > 0 ? number_format_i18n((int) floor($context['cartValue'] * $rate)) : '';
+    }
+
+    public static function product_usp_shortcode(): string
+    {
+        if (!LEWM_Settings::is_module_enabled() || !is_product()) {
+            return '';
+        }
+        $product = wc_get_product((int) get_queried_object_id());
+        if (!$product instanceof WC_Product) {
+            return '';
+        }
+        $settings = LEWM_Settings::get_settings();
+        $points = self::get_product_earning_points_range($product, $settings);
+        if ($points === null) {
+            return '';
+        }
+        $label = (string) ($settings['pdp_usp_label'] ?? 'Ontvang {{points}} Smaakpunten');
+        $text = str_replace(['{{points}}', '{X}'], self::format_earning_points_range($points), $label);
+        wp_enqueue_script('lew-storefront-bridge');
+        return '<span data-lewm-product-usp data-rate="' . esc_attr((string) $settings['pdp_points_per_currency_unit']) . '" data-label="' . esc_attr($label) . '" data-initial-text="' . esc_attr($text) . '" aria-live="polite">' . esc_html($text) . '</span>';
+    }
+
+    public static function render_elementor_points_shortcodes(string $content, $widget): string
+    {
+        // Only expand our text shortcodes; do not execute unrelated widget content.
+        if (!str_contains($content, '[loyalty_engage_order_points') && !str_contains($content, '[loyalty_engage_product_usp')) {
+            return $content;
+        }
+        return preg_replace_callback('/' . get_shortcode_regex(['loyalty_engage_order_points', 'loyalty_engage_product_usp']) . '/s', 'do_shortcode_tag', $content);
     }
 
     public static function render_loyalty_page(): string
